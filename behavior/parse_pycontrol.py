@@ -11,7 +11,7 @@ def make_readable(milliseconds, show_ms=True):
     else:
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-class Extractor:
+class ParseBehavior:
     def __init__(self, prints, events):
         self.prints = prints
         self.events = events
@@ -111,6 +111,83 @@ class Extractor:
             df = df.drop("time", axis=1)
         return df
 
+    def extract_blocks(self, use_existing=True):
+        """Extract blocks and parse block data into a tidy DataFrame.
+
+        The repository stores block data in the prints under key 'new_block'.
+        make_master_df already creates `self.blocks` (with a human-friendly
+        HTML `block` column and an unmodified `block_plain` column). This
+        method will read `self.blocks` (or re-extract the print data) and
+        create `self.parsed_blocks`: a DataFrame with one row per sequence
+        (sub-sequence) in each block including metadata (time, trial,
+        trials_until_change, next_block).
+
+        Returns:
+            pandas.DataFrame: columns [time, trial, block_name, block_index,
+            sequence_index, sequence_raw, sequence_str, trials_until_change,
+            next_block]
+        Also stores the dataframe on self.parsed_blocks for later use.
+        """
+        # obtain blocks DataFrame
+
+        blocks_df = self.extract_print_data(
+            "new_block", ["block", "trials_until_change", "next_block"], include_time=True
+        )
+
+        rows = []
+        for _, r in blocks_df.iterrows():
+            time = r.get("time")
+            trial = r.get("trial")
+            block_plain = r.get("block")
+            trials_until_change = r.get("trials_until_change") if "trials_until_change" in r.index else np.nan
+
+            # try to coerce string representations into Python objects only if needed
+            if block_plain is None:
+                bp = None
+            elif isinstance(block_plain, (list, tuple)):
+                bp = block_plain
+            elif isinstance(block_plain, str):
+                # try to eval a literal
+                try:
+                    bp = eval(block_plain)
+                except Exception:
+                    bp = block_plain
+            else:
+                # unknown type, keep as-is
+                bp = block_plain
+
+            # parse bp into sequences
+            if isinstance(bp, (list, tuple)) and len(bp) >= 1:
+                block_name = bp[0]
+                sequences = bp[1:]
+                for seq_idx, seq in enumerate(sequences, start=1):
+                    seq_raw = seq
+                    try:
+                        seq_str = str(seq)
+                    except Exception:
+                        seq_str = repr(seq)
+                    rows.append(
+                        {
+                            "time": time,
+                            "trial": trial,
+                            "block_name": block_name,
+                            "sequence_index": seq_idx,
+                            "sequence_raw": seq_raw[0],
+                            "reward_vol": seq_raw[1],
+                            "p_reward": seq_raw[2],
+                            "repeat": seq_raw[3],
+                            "stay_after_reward": seq_raw[4],
+                            "trials_until_change": trials_until_change,
+                            "sequence_str": seq_str,
+                        }
+                    )
+
+        parsed = pd.DataFrame(rows)
+        # store for later use
+        self.parsed_blocks = parsed
+
+        return parsed
+
     def extract_notes(self):
         note_list = [
             (tup.time, eval(tup.string)[0].replace("|", "\n"), eval(tup.string)[1])
@@ -123,7 +200,7 @@ class Extractor:
             self.all_notes_str += f"{author}: {note}\n"
 
         return pd.DataFrame(note_list, columns=["time", "note", "author"])
-
+    
     def extract_event(self, event_name):
         event_list = [(tup.time, True) for tup in self.events if tup.name == event_name]
         return pd.DataFrame(event_list, columns=["time", event_name])
@@ -155,6 +232,7 @@ class Extractor:
         streak_DF.loc[rightMask, "streak_counts"] = streak_DF.loc[rightMask, "streak_counts"] * -1
         streak_DF.drop(columns=["choice", "streak_start", "streak_id"], inplace=True)
         return pd.concat([result_df, streak_DF], axis=1)
+    
 
     def extract_nose_detections(self):
         for nose in ["l_nose", "c_nose", "r_nose"]:
@@ -306,15 +384,42 @@ class Extractor:
         df = pd.DataFrame(rows)
         # store for later use
         self.nose_in_out_times = df
-
-        # merge the new columns into master dataframe (one value per trial)
-        if not df.empty:
-            self.all_df = self.all_df.merge(
-                df[["trial", "c_in", "side_in", "c_out", "side_out", "side"]],
-                on="trial",
-                how="left",
-            )
-
         return df
+
+    def extract_reward_flags(self):
+        """Create a dataframe `reward` with trial numbers and boolean columns
+        derived from the `outcome` column in the choices dataframe.
+
+        Columns created:
+            reward      -> outcome == 'C'
+            withheld    -> outcome == 'W'
+            no_reward   -> outcome == 'N'
+            predicted   -> outcome == 'P'
+            background  -> outcome == 'B'
+            abandoned   -> outcome == 'A'
+
+        The function uses `extract_choices_and_streaks()` to obtain outcomes
+        with their trial numbers and returns the resulting dataframe. The
+        dataframe is also stored as `self.reward`.
+        """
+        choices = self.extract_choices_and_streaks()
+        # ensure we have trial and outcome
+        if "trial" not in choices.columns or "outcome" not in choices.columns:
+            raise RuntimeError("choices dataframe missing 'trial' or 'outcome' columns")
+
+        reward_df = pd.DataFrame()
+        reward_df["trial"] = choices["trial"].astype(int)
+        outcome = choices["outcome"].fillna("")
+
+        reward_df["reward"] = outcome == "C"
+        reward_df["withheld"] = outcome == "W"
+        reward_df["no_reward"] = outcome == "N"
+        reward_df["predicted"] = outcome == "P"
+        reward_df["background"] = outcome == "B"
+        reward_df["abandoned"] = outcome == "A"
+
+        # store for later use
+        self.reward = reward_df
+        return reward_df
 
     
