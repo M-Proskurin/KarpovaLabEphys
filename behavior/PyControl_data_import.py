@@ -59,6 +59,23 @@ class Session:
             # Extract and store session data.
             info_lines = [line[2:] for line in all_lines if line[0] == "I"]
 
+            # build info dict from info lines (normalize keys)
+            info = {}
+            for line in info_lines:
+                if " : " in line:
+                    name, value = line.split(" : ", 1)
+                    key = name.lower().replace(" ", "_")
+                    # normalize start_date to start_time ISO format
+                    if key == "start_date":
+                        key = "start_time"
+                        try:
+                            value = datetime.strptime(value, "%Y/%m/%d %H:%M:%S").isoformat()
+                        except Exception:
+                            pass
+                    info[key] = value
+            info["file_path"] = file_path
+            self.info = info
+
             self.experiment_name = next(line for line in info_lines if "Experiment name" in line).split(" : ")[1]
             self.task_name = next(line for line in info_lines if "Task name" in line).split(" : ")[1]
             self.subject_ID = next(line for line in info_lines if "Subject ID" in line).split(" : ")[1]
@@ -127,7 +144,18 @@ class Session:
             self.setup_ID = df.loc[(df["type"] == "info") & (df["subtype"] == "setup_id"), "content"].item()
             datetime_string = df.loc[(df["type"] == "info") & (df["subtype"] == "start_time"), "content"].item()
 
+
             self.datetime = datetime.fromisoformat(datetime_string)
+
+            # build info dict from tsv info rows (subtype -> content)
+            try:
+                info_df = df.loc[df["type"] == "info", ["subtype", "content"]]
+                self.info = dict(zip(info_df["subtype"].tolist(), info_df["content"].tolist()))
+            except Exception:
+                self.info = {}
+            # include file path in info dict
+            self.info["file_path"] = file_path
+
 
             # Extract and store session data.
 

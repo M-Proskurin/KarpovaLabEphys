@@ -11,13 +11,18 @@ def make_readable(milliseconds, show_ms=True):
     else:
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-class ParseBehavior:
-    def __init__(self, prints, events):
-        self.prints = prints
-        self.events = events
+class Extractor:
+    def __init__(self, session):
+        self.prints = session.prints
+        self.events = session.events
+        self.info = session.info
+        self.variables_df = session.variables_df
 
         self.make_master_df()
         self.extract_nose_detections()
+        self.extract_blocks()
+        self.extract_reward_flags()
+        self.extract_nose_in_out_times()
 
     def make_master_df(self):
         # dwell times
@@ -175,8 +180,8 @@ class ParseBehavior:
                             "sequence_raw": seq_raw[0],
                             "reward_vol": seq_raw[1],
                             "p_reward": seq_raw[2],
-                            "repeat": seq_raw[3],
-                            "stay_after_reward": seq_raw[4],
+                            "use_fresh": seq_raw[3],
+                            "no_repeat": seq_raw[4],
                             "trials_until_change": trials_until_change,
                             "sequence_str": seq_str,
                         }
@@ -187,6 +192,31 @@ class ParseBehavior:
         self.parsed_blocks = parsed
 
         return parsed
+
+    def extract_sync_times(self):
+        """Extract prints whose payload contains the key 'next_n_frame'.
+
+        Returns a DataFrame with columns ['time','trial','next_n_frame','payload']
+        and stores it on `self.next_n_frame_df`.
+        """
+        rows = []
+        # prefer structured variables DataFrame if available
+        vdf = getattr(self, "variables_df", None)
+        syncTimes = []
+        vdf_prints = vdf[vdf["subtype"] == "print"]
+        for _, row in vdf_prints.iterrows():
+            if row["values"]["next_n_frame"] > 0:
+                syncTimes.append(row["time"])
+        syncTimes = np.array(syncTimes).astype(float)
+        syncTimes = syncTimes.flatten()
+
+        if len(syncTimes) == 0:
+            syncTimes = [tup.time for tup in self.events if tup.subtype == 'sync']
+            syncTimes = np.array(syncTimes).astype(float)
+
+        # store for later use
+        self.sync_times = syncTimes
+        return syncTimes
 
     def extract_notes(self):
         note_list = [
@@ -233,7 +263,6 @@ class ParseBehavior:
         streak_DF.drop(columns=["choice", "streak_start", "streak_id"], inplace=True)
         return pd.concat([result_df, streak_DF], axis=1)
     
-
     def extract_nose_detections(self):
         for nose in ["l_nose", "c_nose", "r_nose"]:
             in_mask = self.all_df[f"{nose}_TOF_in"] == True
@@ -391,7 +420,7 @@ class ParseBehavior:
         derived from the `outcome` column in the choices dataframe.
 
         Columns created:
-            reward      -> outcome == 'C'
+            correct      -> outcome == 'C'
             withheld    -> outcome == 'W'
             no_reward   -> outcome == 'N'
             predicted   -> outcome == 'P'
@@ -411,7 +440,7 @@ class ParseBehavior:
         reward_df["trial"] = choices["trial"].astype(int)
         outcome = choices["outcome"].fillna("")
 
-        reward_df["reward"] = outcome == "C"
+        reward_df["correct"] = outcome == "C"
         reward_df["withheld"] = outcome == "W"
         reward_df["no_reward"] = outcome == "N"
         reward_df["predicted"] = outcome == "P"
@@ -422,4 +451,95 @@ class ParseBehavior:
         self.reward = reward_df
         return reward_df
 
+class Behavior:
+    """Container for parsed behavior outputs produced from an Extractor.
+
+    Fields are populated lazily from an Extractor instance passed to the
+    constructor. This groups related parsed data under a single attribute
+    `behavior.parse_behavior`.
+    """
+    def __init__(self, extractor: "Extractor"):
+        self.extractor = extractor
+        # core tables
+        self.info = getattr(extractor, "info", {})
+        self.build_trial_dataframe()
+        # create integer flag fields for convenience: 1/0
+        if hasattr(self, "trial_summary") and self.trial_summary is not None:
+            # ensure boolean columns exist; fill missing with False
+            for col in ["reward", "omission", "abandoned"]:
+                if col not in self.trial_summary.columns:
+                    self.trial_summary[col] = False
+            # convert booleans to integers (1/0)
+            self.reward = self.trial_summary["reward"].astype(int)
+            self.omission = self.trial_summary["omission"].astype(int)
+            self.abandoned = self.trial_summary["abandoned"].astype(int)
+            # map choice letters to ints: L->0, R->1, others -> -1
+            def _choice_to_int(x):
+                if pd.isna(x):
+                    return -1
+                if x == "L":
+                    return 1
+                if x == "R":
+                    return 0
+                return -1
+
+            # preserve original choice column as string and add numeric column
+            self.choice = self.trial_summary["choice"].apply(_choice_to_int)
+        # parsed artifacts (call extractor methods if attributes missing)
+        self.parsed_blocks = getattr(extractor, "parsed_blocks", None)
+        if self.parsed_blocks is None:
+            try:
+                self.parsed_blocks = extractor.extract_blocks()
+            except Exception:
+                self.parsed_blocks = None
+
+        self.times = getattr(extractor, "nose_in_out_times", None)
+
+
+        
+
+    def build_trial_dataframe(self):
+        """Build a trial-level dataframe with choice, reward/omission/abandonment
+        flags, reward volume, and nose in/out timing fields (when available).
+
+        Result columns: ['trial','choice','reward','omission','abandonment','reward_volume',
+        'c_in','c_out','side_in','side_out','side','order_ok','order_issue']
+        The result is stored on `self.trial_summary` and returned.
+        """
+        # get choices/outcomes
+        try:
+            choices = self.extractor.extract_choices_and_streaks()
+        except Exception:
+            # fallback to parse_behavior.choices if available
+            choices = getattr(self.parse_behavior, "choices", None)
+        if choices is None:
+            raise RuntimeError("Could not obtain choices dataframe to build trial summary")
+
+        choices = choices.copy()
+        choices["trial"] = choices["trial"].astype(int)
+
+        # base df
+        df = pd.DataFrame()
+        df["trial"] = choices["trial"]
+        df["choice"] = choices.get("choice")
+        df["reward_volume"] = choices.get("reward_volume") if "reward_volume" in choices else np.nan
+
+        outcome = choices.get("outcome").fillna("") if "outcome" in choices else pd.Series([""] * len(choices))
+        df["reward"] = outcome.isin(["C", "B"])
+        df["omission"] = outcome == "W"
+        df["abandoned"] = outcome == "A"
+
+        # attach nose in/out times if available
+        nose_df = getattr(self.extractor, "nose_in_out_times", None)
+        if nose_df is not None:
+            merged = df.merge(nose_df[["trial", "c_in", "c_out", "side_in", "side_out", "order_ok"]], on="trial", how="left")
+        else:
+            merged = df
+
+        self.trial_summary = merged
+        return merged
+
+
+
+    
     
