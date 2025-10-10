@@ -23,6 +23,7 @@ class Extractor:
         self.extract_blocks()
         self.extract_reward_flags()
         self.extract_nose_in_out_times()
+        self.extract_sync_times()
 
     def make_master_df(self):
         # dwell times
@@ -494,7 +495,7 @@ class Behavior:
                 self.parsed_blocks = None
 
         self.times = getattr(extractor, "nose_in_out_times", None)
-
+        self.sync_times = getattr(extractor, "sync_times", None)
 
         
 
@@ -510,8 +511,8 @@ class Behavior:
         try:
             choices = self.extractor.extract_choices_and_streaks()
         except Exception:
-            # fallback to parse_behavior.choices if available
-            choices = getattr(self.parse_behavior, "choices", None)
+            # fallback to extractor.choices if available
+            choices = getattr(self.extractor, "choices", None)
         if choices is None:
             raise RuntimeError("Could not obtain choices dataframe to build trial summary")
 
