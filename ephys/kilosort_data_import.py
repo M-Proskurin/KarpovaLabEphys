@@ -4,6 +4,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+SAMPLE_RATE = 30000.0
+
 class KilosortData:
     def __init__(self, data_dir):
         self.data_dir = Path(data_dir)
@@ -12,6 +14,7 @@ class KilosortData:
         self.load_spike_data()
         self.select_clusters()
         self.extract_cluster_properties()
+        self.allSpikeSI = self.get_cluster_spikes_fast()
         
 
     def locate_KS_folder(self):
@@ -38,7 +41,7 @@ class KilosortData:
         if not spike_times_path.exists() or not spike_clusters_path.exists():
             raise FileNotFoundError("Spike times or clusters file not found in the specified directory.")
 
-        self.spike_times = np.load(spike_times_path)
+        self.spike_times = np.load(spike_times_path) - 31 # to align with the middle of the template
         self.spike_clusters = np.load(spike_clusters_path)
         self.channel_map = np.load(channel_map_path) if channel_map_path.exists() else None
 
@@ -82,8 +85,8 @@ class KilosortData:
             ks_channel = channel_map[channel]
             amplitude_df = pd.read_csv(self.KSfolder / 'cluster_Amplitude.tsv', sep='\t') 
             amplitude = amplitude_df.loc[amplitude_df["cluster_id"].isin(ks_ids), ["Amplitude"]]
-            fr = np.empty(len(ks_ids))
-            amp = np.empty(len(ks_ids))
+            fr = []
+            amp = []
         else:
             ci = self.cluster_info
             ks_ids = ci["cluster_id"].tolist()
@@ -127,6 +130,68 @@ class KilosortData:
             channels[i] = ch_idx
 
         return channels
+
+    def read_timestamps(self):
+        """
+        Locate the first '*.timestamps.dat' file in the parent directory of KSfolder
+        and return the sample indices as a numpy array (dtype=np.uint64).
+        """
+        ks = Path(self.KSfolder)
+        parent = ks.parent
+        try:
+            fpath = next(parent.glob("*.timestamps.dat"))
+        except StopIteration:
+            raise FileNotFoundError(f"No '*.timestamps.dat' found in {parent}")
+        
+        n_header = 25
+        with open(fpath, "rb") as fid:
+            if fpath.name != "sd_in_env.timestamps.dat":
+                for _ in range(n_header):
+                    fid.readline()
+            rest = fid.read()
+
+        if len(rest) % 4 != 0:
+            raise ValueError("Timestamps file length (after header) is not a multiple of 4 bytes")
+
+        # Interpret bytes as little-endian unsigned 32-bit integers
+        samples = np.frombuffer(rest, dtype="<u4").astype(np.uint64)
+        return samples
+
+    def get_cluster_spikes(self):
+        sample_indices = self.read_timestamps()
+        spike_SI = sample_indices[self.spike_times]
+        allSpikeSI = [spike_SI[self.spike_clusters == int(c)] for c in self.ks_ids]
+        return allSpikeSI
+    
+    def get_cluster_spikes_fast(self):
+        """Return a list of numpy arrays, each containing spike sample indices for a cluster."""
+        sample_indices = self.read_timestamps()
+        spike_SI = sample_indices[self.spike_times]
+        spike_clusters = self.spike_clusters
+        ks_ids = self.ks_ids
+        order = np.argsort(spike_clusters)
+        sorted_clusters = spike_clusters[order]
+        sorted_spike_SI = spike_SI[order]
+
+        # find boundaries for unique cluster ids
+        unique_ids, start_idx, counts = np.unique(sorted_clusters, return_index=True, return_counts=True)
+
+        # map cluster id -> array slice
+        grouped = {}
+        for uid, s, cnt in zip(unique_ids, start_idx, counts):
+            # sort spikes within group to ensure ascending order
+            grouped[int(uid)] = np.sort(sorted_spike_SI[s : s + cnt])
+
+        # now collect for ks_ids (missing ids will not be present in grouped)
+        allSpikeSI_fast = [grouped.get(int(c), np.array([], dtype=spike_SI.dtype)) for c in ks_ids]
+        return allSpikeSI_fast
+
+    def find_buggy_perfiods(self):
+        """Identify and return periods of buggy performance."""
+        # Placeholder implementation; actual logic to identify buggy periods goes here
+        buggy_periods = []  # Replace with actual detection logic
+        return buggy_periods
+
 
     def get_spike_data(self):
         """Return spike times and cluster assignments."""
