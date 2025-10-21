@@ -495,7 +495,7 @@ class Behavior:
                 self.parsed_blocks = None
 
         self.times = getattr(extractor, "nose_in_out_times", None)
-        self.sync_times = getattr(extractor, "sync_times", None)
+        self.TSBSync = getattr(extractor, "sync_times", None)
 
         
 
