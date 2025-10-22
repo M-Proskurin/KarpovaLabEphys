@@ -107,6 +107,10 @@ class KilosortData:
         channel_positions = np.load(self.KSfolder / 'channel_positions.npy') 
         DV = channel_positions[tuple(channel),1]
         XX = channel_positions[tuple(channel),0]
+        nn = len(ks_ids)
+        i_shank = np.round(XX / 100.0).astype(int)
+        cell_numbers = np.column_stack((i_shank, np.arange(0, nn, dtype=int)))
+        self.cell_numbers = cell_numbers
 
         self.channel = ks_channel.squeeze()
         self.amplitude = np.array(amplitude).squeeze()
@@ -295,9 +299,8 @@ class KilosortData:
         buggy_samples = np.diff(buggy_SI).sum()
 
         print(f"Found {len(buggy_SI)} buggy periods with total duration {buggy_samples / SAMPLE_RATE:.2f} s")
-        self.buggy_periods = buggy_SI
+        self.buggy_periods = results
         return results
-
 
     def get_spike_data(self):
         """Return spike times and cluster assignments."""
