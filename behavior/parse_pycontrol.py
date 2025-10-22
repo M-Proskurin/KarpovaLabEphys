@@ -455,7 +455,7 @@ class Extractor:
 class Behavior:
     """Container for parsed behavior outputs produced from an Extractor.
 
-    Fields are populated lazily from an Extractor instance passed to the
+    Fields are populated from an Extractor instance passed to the
     constructor. This groups related parsed data under a single attribute
     `behavior.parse_behavior`.
     """
@@ -463,41 +463,18 @@ class Behavior:
         self.extractor = extractor
         # core tables
         self.info = getattr(extractor, "info", {})
+        self.behavior_file = self.info["file_path"] 
+        self.rat = self.info.get("subject_id")
+        self.date = self.info.get("start_time")[:10]
         self.build_trial_dataframe()
         # create integer flag fields for convenience: 1/0
-        if hasattr(self, "trial_summary") and self.trial_summary is not None:
-            # ensure boolean columns exist; fill missing with False
-            for col in ["reward", "omission", "abandoned"]:
-                if col not in self.trial_summary.columns:
-                    self.trial_summary[col] = False
-            # convert booleans to integers (1/0)
-            self.reward = self.trial_summary["reward"].astype(int)
-            self.omission = self.trial_summary["omission"].astype(int)
-            self.abandoned = self.trial_summary["abandoned"].astype(int)
-            # map choice letters to ints: L->0, R->1, others -> -1
-            def _choice_to_int(x):
-                if pd.isna(x):
-                    return -1
-                if x == "L":
-                    return 1
-                if x == "R":
-                    return 0
-                return -1
 
-            # preserve original choice column as string and add numeric column
-            self.choice = self.trial_summary["choice"].apply(_choice_to_int)
-        # parsed artifacts (call extractor methods if attributes missing)
         self.parsed_blocks = getattr(extractor, "parsed_blocks", None)
-        if self.parsed_blocks is None:
-            try:
-                self.parsed_blocks = extractor.extract_blocks()
-            except Exception:
-                self.parsed_blocks = None
-
-        self.times = getattr(extractor, "nose_in_out_times", None)
+        self.times_df = getattr(extractor, "nose_in_out_times", None)
+        self.times = np.array(self.times_df[["c_in", "c_out", "side_in", "side_out"]]) 
+        self.time_legends = ["c_in", "c_out", "side_in", "side_out"]
         self.TSBSync = getattr(extractor, "sync_times", None)
 
-        
 
     def build_trial_dataframe(self):
         """Build a trial-level dataframe with choice, reward/omission/abandonment
@@ -509,23 +486,23 @@ class Behavior:
         """
         # get choices/outcomes
         try:
-            choices = self.extractor.extract_choices_and_streaks()
+            choices_df = self.extractor.extract_choices_and_streaks()
         except Exception:
             # fallback to extractor.choices if available
-            choices = getattr(self.extractor, "choices", None)
-        if choices is None:
+            choices_df = getattr(self.extractor, "choices", None)
+        if choices_df is None:
             raise RuntimeError("Could not obtain choices dataframe to build trial summary")
 
-        choices = choices.copy()
-        choices["trial"] = choices["trial"].astype(int)
+        choices_df = choices_df.copy()
+        choices_df["trial"] = choices_df["trial"].astype(int)
 
         # base df
         df = pd.DataFrame()
-        df["trial"] = choices["trial"]
-        df["choice"] = choices.get("choice")
-        df["reward_volume"] = choices.get("reward_volume") if "reward_volume" in choices else np.nan
+        df["trial"] = choices_df["trial"]
+        df["choice"] = choices_df.get("choice")
+        df["reward_volume"] = choices_df.get("reward_volume") if "reward_volume" in choices_df else np.nan
 
-        outcome = choices.get("outcome").fillna("") if "outcome" in choices else pd.Series([""] * len(choices))
+        outcome = choices_df.get("outcome").fillna("") if "outcome" in choices_df else pd.Series([""] * len(choices_df))
         df["reward"] = outcome.isin(["C", "B"])
         df["omission"] = outcome == "W"
         df["abandoned"] = outcome == "A"
@@ -538,6 +515,27 @@ class Behavior:
             merged = df
 
         self.trial_summary = merged
+        # convert booleans to integers (1/0)
+        self.reward = np.array(merged["reward"].astype(int))
+        self.omission = np.array(merged["omission"].astype(int))
+        self.abandoned = np.array(merged["abandoned"].astype(int))
+        self.reward_volume = np.array(merged["reward_volume"].astype(int))
+        self.outcome_delay = np.array(choices_df.get("outcome_delay")) if "outcome_delay" in choices_df else np.array([np.nan]*len(merged))
+        self.matched_str = np.array(choices_df.get("matched_str")) if "matched_str" in choices_df else np.array([np.nan]*len(merged))
+        self.matched_rule = np.array(choices_df.get("matched_rule")) if "matched_rule" in choices_df else np.array([np.nan]*len(merged))
+
+        # map choice letters to ints: L->0, R->1, others -> -1
+        def _choice_to_int(x):
+            if pd.isna(x):
+                return -1
+            if x == "L":
+                return 1
+            if x == "R":
+                return 0
+            return -1
+
+        # preserve original choice column as string and add numeric column
+        self.choice = merged["choice"].apply(_choice_to_int)
         return merged
 
 
