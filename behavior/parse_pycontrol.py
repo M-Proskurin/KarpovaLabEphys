@@ -349,11 +349,16 @@ class Extractor:
 
             # last side nose out within this trial (based on choice)
             trial_rows = self.all_df[self.all_df.trial == trial_num + 1] # look in next trial for side nose out
+            if t == trials[-1]:
+                trial_rows = self.all_df[self.all_df.trial == trial_num]  # last trial, look within same trial
             if side:
                 col = f"{side}_nose_TOF_out"
                 if col in trial_rows.columns:
                     side_times = trial_rows.loc[trial_rows[col] == True, "time"]
                     last_side = float(side_times.max()) if not side_times.empty else np.nan
+                    if  t == trials[-2]:
+                        # last trial, ensure last_side is after first_side if first_side exists
+                        last_side = float(side_times.min()) if not side_times.empty else np.nan
                 else:
                     last_side = np.nan
             else:
@@ -364,8 +369,8 @@ class Extractor:
                     "trial": trial_num,
                     "choice": choice,
                     "c_in": first_c,
-                    "side_in": first_side,
                     "c_out": last_c,
+                    "side_in": first_side,                  
                     "side_out": last_side,
                     "side": side,
                 }
@@ -500,7 +505,9 @@ class Behavior:
         df = pd.DataFrame()
         df["trial"] = choices_df["trial"]
         df["choice"] = choices_df.get("choice")
+        df["streak_counts"] = choices_df.get("streak_counts")
         df["reward_volume"] = choices_df.get("reward_volume") if "reward_volume" in choices_df else np.nan
+        df["matched_rule"] = choices_df.get("matched_rule") if "matched_rule" in choices_df else np.nan
 
         outcome = choices_df.get("outcome").fillna("") if "outcome" in choices_df else pd.Series([""] * len(choices_df))
         df["reward"] = outcome.isin(["C", "B"])
