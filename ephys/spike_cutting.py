@@ -71,14 +71,14 @@ def convolve_matrix(spike_matrix, bins_to_average):
     return smoothed
 
 
-def spike_cutting(b, e, spike_bin_size=0.1, anscombe_true=False, bins_to_average=1, 
+def spike_cutting(times, all_spike_times, spike_bin_size=0.1, anscombe_true=False, bins_to_average=1, 
                  time_around_poke=1, **kwargs):
     """
     Cut spike data around behavioral events.
     
     Parameters:
-    b: behavior object with timesEphys attribute
-    e: ephys object with allSpikeTimes attribute
+    times: list of arrays with event times
+    all_spike_times: list of arrays with spike times for each neuron
     spike_bin_size: bin size for spike trains (seconds)
     anscombe_true: whether to apply Anscombe transformation
     bins_to_average: number of bins to average for smoothing
@@ -99,11 +99,8 @@ def spike_cutting(b, e, spike_bin_size=0.1, anscombe_true=False, bins_to_average
         elif key == 'time_around_poke':
             time_around_poke = value
     
-    # Get behavior times
-    times = b.times  # This should be a list of arrays with event times
-    
     # Bin spikes
-    last_spike_time, spike_matrix = bin_spikes(e.all_spike_times, spike_bin_size)
+    last_spike_time, spike_matrix = bin_spikes(all_spike_times, spike_bin_size)
     
     # Apply transformations
     if anscombe_true:
