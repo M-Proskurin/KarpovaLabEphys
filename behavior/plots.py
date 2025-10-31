@@ -45,7 +45,7 @@ ORANGE_LIGHT = "#FFB347"
 BLUE_LIGHT = "#87CEEB"
 
 PLOT_HEIGHT = 280
-MARKER_SIZE = 10.5
+MARKER_SIZE = 7
 SMALL_MARKER_SIZE = 3
 Y_RANGE_PLUS_MINUS = 7
 
@@ -411,17 +411,14 @@ def plot_interactive_behavior(behavior, save_path=None, show=True):
         times_ms = np.cumsum(np.random.exponential(30, n_trials)) * 1000
     
     # Prepare choice data for plotting
-    choice_y = []
+    choice_y = trial_df["streak_counts"]
     choice_colors = []
     for choice in behavior.choice:
         if choice == 1:  # Left
-            choice_y.append(1)
             choice_colors.append(ORANGE)
         elif choice == 0:  # Right
-            choice_y.append(-1)
             choice_colors.append(BLUE)
         else:  # Invalid/No choice
-            choice_y.append(0)
             choice_colors.append(GREY)
     
     # Prepare outcome colors
@@ -495,51 +492,54 @@ def plot_interactive_behavior(behavior, save_path=None, show=True):
     # Main trial plot
     trial_plot = bk.figure(
         title="Trial Outcomes and Choices",
-        width=900,
+        sizing_mode="stretch_width",
         height=PLOT_HEIGHT,
-        tools="pan,wheel_zoom,box_zoom,reset,save,tap",
-        active_scroll="wheel_zoom",
+        tools="xwheel_zoom,xpan,reset,save,tap",
+        active_scroll="xwheel_zoom",
         x_axis_label="Trial Number",
+        x_range=(-50, 50),
         y_range=(-Y_RANGE_PLUS_MINUS, Y_RANGE_PLUS_MINUS),
-        toolbar_location="above"
+        toolbar_location="right"
     )
     
     # Time plot
     time_plot = bk.figure(
-        title="Behavior Over Time",
-        width=900,
+        title="Outcomes and events over time",
+        sizing_mode="stretch_width",
         height=PLOT_HEIGHT,
-        tools="pan,wheel_zoom,box_zoom,reset,save,tap",
-        active_scroll="wheel_zoom",
-        x_axis_label="Time (ms)",
+        tools="xwheel_zoom,xpan,reset,save,tap",
+        active_scroll="xwheel_zoom",
+        x_axis_label="Time",
         x_axis_type="datetime",
         y_range=(-Y_RANGE_PLUS_MINUS, Y_RANGE_PLUS_MINUS),
-        toolbar_location="above"
+        toolbar_location="right"
     )
     
     # Performance plot
     perf_plot = bk.figure(
         title="Running Performance",
-        width=900,
+        sizing_mode="stretch_width",
         height=200,
-        tools="pan,wheel_zoom,box_zoom,reset,save",
-        active_scroll="wheel_zoom",
+        tools="xwheel_zoom,reset,save",
+        active_scroll="xwheel_zoom",
         x_axis_label="Trial Number",
         y_axis_label="Performance (%)",
-        toolbar_location="above"
+        x_range=trial_plot.x_range,  # Link to trial plot x_range
+        toolbar_location="right"
     )
     
     # Bias plot
     bias_plot = bk.figure(
         title="Choice Bias Over Time",
-        width=900,
+        sizing_mode="stretch_width",
         height=200,
-        tools="pan,wheel_zoom,box_zoom,reset,save",
-        active_scroll="wheel_zoom",
+        tools="xwheel_zoom,reset,save",
+        active_scroll="xwheel_zoom",
         x_axis_label="Trial Number",
         y_axis_label="Choice Bias",
         y_range=(-1.1, 1.1),
-        toolbar_location="above"
+        x_range=trial_plot.x_range,  # Link to trial plot x_range
+        toolbar_location="right"
     )
     
     # Add choice markers
@@ -681,19 +681,19 @@ def plot_interactive_behavior(behavior, save_path=None, show=True):
     # Create range selector plots
     trial_selector = bk.figure(
         height=100,
-        width=900,
+        sizing_mode="stretch_width",
         tools="",
         toolbar_location=None,
-        y_range=(-2, 2)
+        y_range=(-7, 7)
     )
     
     time_selector = bk.figure(
         height=100,
-        width=900,
+        sizing_mode="stretch_width",
         tools="",
         toolbar_location=None,
         x_axis_type="datetime",
-        y_range=(-2, 2)
+        y_range=(-7, 7)
     )
     
     # Add data to selectors
@@ -755,7 +755,7 @@ def plot_interactive_behavior(behavior, save_path=None, show=True):
     # Layout
     controls = row(
         goto_trial_btn, goto_trial_spinner,
-        sizing_mode="fixed"
+        sizing_mode="stretch_width"
     )
     
     layout = column(
@@ -772,12 +772,27 @@ def plot_interactive_behavior(behavior, save_path=None, show=True):
     
     # Create tabs
     main_tab = TabPanel(child=layout, title="Behavioral Analysis")
-    tabs = Tabs(tabs=[main_tab])
+    tabs = Tabs(tabs=[main_tab], sizing_mode="stretch_width")
     
     # Show or save
     if save_path:
-        bk.output_file(save_path)
-        bk.save(tabs)
+        bk.output_file(save_path, title="Behavioral Analysis")
+        # Add custom CSS for full width
+        from bokeh.models import Div
+        from bokeh.layouts import column as bokeh_column
+        
+        # Create a wrapper with custom CSS
+        css_div = Div(text="""
+        <style>
+        body { margin: 0; padding: 0; }
+        .bk-root { width: 100% !important; }
+        .bk-layout-fixed { width: 100% !important; }
+        </style>
+        """, sizing_mode="stretch_width")
+        
+        # Wrap the tabs with CSS
+        final_layout = bokeh_column(css_div, tabs, sizing_mode="stretch_width")
+        bk.save(final_layout)
         print(f"Interactive plot saved to: {save_path}")
     
     if show:
